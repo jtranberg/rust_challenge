@@ -81,11 +81,18 @@ impl Blockchain {
     fn add_transaction(&mut self, transaction: Transaction) {
         let block = Block {
             transactions: vec![transaction],
-            timestamp: 123456789, // Replace with actual timestamp
+            timestamp: 123456789, // Replace with an actual timestamp logic
         };
         self.chain.push(block);
-        println!("Added block to chain: {:?}", self.chain.last());
+    
+        // Use pretty formatting for better readability
+        println!(
+            "Added block to chain:\n{} transactions\nTimestamp: {}\n",
+            self.chain.last().unwrap().transactions.len(),
+            self.chain.last().unwrap().timestamp
+        );
     }
+    
 
     fn get_balance(&self, id: &String) {
         match self.accounts.get(id) {
