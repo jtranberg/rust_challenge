@@ -1,4 +1,8 @@
 use std::collections::HashMap;
+use std::io;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug)]
 struct Account {
@@ -6,7 +10,7 @@ struct Account {
     balance: i64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Transaction {
     from: Option<String>,
     to: String,
@@ -23,6 +27,7 @@ struct Block {
 struct Blockchain {
     accounts: HashMap<String, Account>,
     chain: Vec<Block>,
+    pending_transactions: Vec<Transaction>,
 }
 
 impl Blockchain {
@@ -30,6 +35,7 @@ impl Blockchain {
         Self {
             accounts: HashMap::new(),
             chain: Vec::new(),
+            pending_transactions: Vec::new(),
         }
     }
 
@@ -50,49 +56,22 @@ impl Blockchain {
 
     fn transfer(&mut self, from: String, to: String, amount: i64) {
         if self.accounts.contains_key(&from) && self.accounts.contains_key(&to) {
-            let mut from_account = self.accounts.remove(&from).unwrap();
-            let mut to_account = self.accounts.remove(&to).unwrap();
-
+            let from_account = self.accounts.get(&from).unwrap();
             if from_account.balance >= amount {
-                from_account.balance -= amount;
-                to_account.balance += amount;
-
                 let transaction = Transaction {
                     from: Some(from.clone()),
                     to: to.clone(),
                     amount,
                 };
-                println!("Created transaction: {:?}", transaction);
-
-                self.add_transaction(transaction);
-
-                println!("Transfer successful.");
+                self.pending_transactions.push(transaction);
+                println!("Transaction queued and will be confirmed in the next block.");
             } else {
                 println!("Insufficient funds.");
             }
-
-            self.accounts.insert(from.clone(), from_account);
-            self.accounts.insert(to.clone(), to_account);
         } else {
             println!("One or both accounts not found.");
         }
     }
-
-    fn add_transaction(&mut self, transaction: Transaction) {
-        let block = Block {
-            transactions: vec![transaction],
-            timestamp: 123456789, // Replace with an actual timestamp logic
-        };
-        self.chain.push(block);
-    
-        // Use pretty formatting for better readability
-        println!(
-            "Added block to chain:\n{} transactions\nTimestamp: {}\n",
-            self.chain.last().unwrap().transactions.len(),
-            self.chain.last().unwrap().timestamp
-        );
-    }
-    
 
     fn get_balance(&self, id: &String) {
         match self.accounts.get(id) {
@@ -100,20 +79,77 @@ impl Blockchain {
             None => println!("Account not found."),
         }
     }
+
+    fn mint_block(&mut self) {
+        if !self.pending_transactions.is_empty() {
+            let block = Block {
+                transactions: self.pending_transactions.drain(..).collect(),
+                timestamp: current_timestamp(),
+            };
+            for tx in &block.transactions {
+                if let Some(from) = &tx.from {
+                    let mut from_account = self.accounts.get_mut(from).unwrap();
+                    from_account.balance -= tx.amount;
+                }
+                let mut to_account = self.accounts.get_mut(&tx.to).unwrap();
+                to_account.balance += tx.amount;
+            }
+            self.chain.push(block);
+            println!("New block minted with confirmed transactions.");
+        } else {
+            println!("No transactions to confirm. Skipping block minting.");
+        }
+    }
+}
+
+fn current_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+fn start_minting(blockchain: Arc<Mutex<Blockchain>>) {
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_secs(10));
+        let mut blockchain = blockchain.lock().unwrap();
+        blockchain.mint_block();
+    });
 }
 
 fn main() {
-    let mut blockchain = Blockchain::new();
+    let blockchain = Arc::new(Mutex::new(Blockchain::new()));
 
-    // Example usage
-    blockchain.create_account("Alice".to_string(), 100);
-    blockchain.create_account("Bob".to_string(), 50);
+    // Start block minting in a separate thread
+    start_minting(Arc::clone(&blockchain));
 
-    blockchain.get_balance(&"Alice".to_string());
-    blockchain.get_balance(&"Bob".to_string());
+    println!("Toy Blockchain 'B' is running...");
+    loop {
+        println!("Enter a command (create-account, transfer, balance, exit):");
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+        let args: Vec<&str> = input.trim().split_whitespace().collect();
 
-    blockchain.transfer("Alice".to_string(), "Bob".to_string(), 30);
+        let mut blockchain = blockchain.lock().unwrap();
 
-    blockchain.get_balance(&"Alice".to_string());
-    blockchain.get_balance(&"Bob".to_string());
+        match args.get(0) {
+            Some(&"create-account") if args.len() == 3 => {
+                let id = args[1].to_string();
+                let balance = args[2].parse::<i64>().unwrap_or(0);
+                blockchain.create_account(id, balance);
+            }
+            Some(&"transfer") if args.len() == 4 => {
+                let from = args[1].to_string();
+                let to = args[2].to_string();
+                let amount = args[3].parse::<i64>().unwrap_or(0);
+                blockchain.transfer(from, to, amount);
+            }
+            Some(&"balance") if args.len() == 2 => {
+                let id = args[1].to_string();
+                blockchain.get_balance(&id);
+            }
+            Some(&"exit") => break,
+            _ => println!("Invalid command or arguments."),
+        }
+    }
 }
